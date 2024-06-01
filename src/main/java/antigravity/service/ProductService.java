@@ -5,10 +5,12 @@ import antigravity.domain.entity.Promotion;
 import antigravity.model.request.ProductInfoRequest;
 import antigravity.model.response.ProductAmountResponse;
 import antigravity.repository.ProductRepository;
+import antigravity.service.discount.PromotionDiscount;
+import antigravity.service.discount.WonDiscount;
+import antigravity.service.discount.PercentDiscount;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
-import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 
@@ -23,61 +25,18 @@ public class ProductService {
         //유효한 객체인지
         if (!isRequestValid(request)) {
             return null;
-        }else{
-
-            Product product = repository.getProduct(request.getProductId());
-            System.out.println(product);
-
-
-            int originPrice = product.getPrice();
-            int discountPrice = 0; // 총 할인 금액
-
-            System.out.println(Arrays.toString(request.getCouponIds()));
-
-            // 프로모션 정보 가져오기
-            List<Promotion> promotions = repository.getPromotion(request.getCouponIds());
-            System.out.println(promotions);
-
-            Date currentDate = new Date();
-
-            // 프로모션 적용
-            for (Promotion promotion : promotions) {
-
-                //promotion 검증
-                if (!isPromotionValid(promotion)) {
-                    continue;
-                }
-
-                // 쿠폰 검증 로직 - 사용가능한 쿠폰만 적용
-                if (currentDate.before(promotion.getUse_started_at()) || currentDate.after(promotion.getUse_ended_at())) {
-                    continue;
-                }
-
-                PromotionDiscount discount = getDiscountPrice(promotion);
-                int discountedPrice = discount.applyDiscount(originPrice, promotion.getDiscount_value());
-                discountPrice += (originPrice - discountedPrice);
-
-            }
-
-
-            // 최종 가격 계산
-            int finalPrice = originPrice - discountPrice;
-
-            // 최종 가격은 천단위 절삭
-            finalPrice = (finalPrice / 1000) * 1000;
-
-            // 최소 및 최대 가격
-            if (finalPrice < 10000) {
-                finalPrice = 10000;
-            } else if (finalPrice > 10000000) {
-                finalPrice = 10000000;
-            }
-
-            // ProductAmountResponse 객체로 반환
-            return new ProductAmountResponse(product.getName(), originPrice, discountPrice, finalPrice);
-
         }
 
+        Product product = repository.getProduct(request.getProductId());
+        System.out.println(product);
+
+        int originPrice = product.getPrice();
+        int discountPrice = calculateDiscountPrice(request, originPrice);
+
+        int finalPrice = calculateFinalPrice(originPrice, discountPrice);
+
+        // ProductAmountResponse 객체로 반환
+        return new ProductAmountResponse(product.getName(), originPrice, discountPrice, finalPrice);
 
     }
 
@@ -101,12 +60,63 @@ public class ProductService {
         if (promotion.getDiscount_value() <= 0) {
             System.out.println("promotion.getDiscount_value() is not valid");
             return false;
-        } else if (!"COUPON".equals(promotion.getPromotion_type()) && !"CODE".equals(promotion.getPromotion_type())) {
+        }
+        if (!"COUPON".equals(promotion.getPromotion_type()) && !"CODE".equals(promotion.getPromotion_type())) {
             System.out.println("promotion.getPromotion_type() is not valid");
             return false;
         }
         return true;
     }
+
+    private boolean isPromotionApplicable(Promotion promotion, Date currentDate) {
+        return !(currentDate.before(promotion.getUse_started_at()) || currentDate.after(promotion.getUse_ended_at()));
+    }
+
+    private int calculateDiscountPrice(ProductInfoRequest request, int originPrice) {
+
+        int discountPrice = 0; // 총 할인 금액
+
+        // 프로모션 정보 가져오기
+        List<Promotion> promotions = repository.getPromotion(request.getCouponIds());
+        System.out.println(promotions);
+
+        Date currentDate = new Date();
+
+        // 프로모션 적용
+        for (Promotion promotion : promotions) {
+
+            //promotion 및 쿠폰 검증
+            if (!isPromotionValid(promotion) || !isPromotionApplicable(promotion, currentDate)) {
+                continue;
+            }
+
+            PromotionDiscount discount = getDiscountPrice(promotion);
+            int discountedPrice = discount.applyDiscount(originPrice, promotion.getDiscount_value());
+            discountPrice += (originPrice - discountedPrice);
+
+        }
+
+        return discountPrice;
+    }
+
+    private int calculateFinalPrice(int originPrice, int discountPrice) {
+
+        // 최종 가격 계산
+        int finalPrice = originPrice - discountPrice;
+
+        // 최종 가격은 천단위 절삭
+        finalPrice = (finalPrice / 1000) * 1000;
+
+        // 최소 및 최대 가격
+        if (finalPrice < 10000) {
+            finalPrice = 10000;
+        } else if (finalPrice > 10000000) {
+            finalPrice = 10000000;
+        }
+
+        return finalPrice;
+    }
+
 
     private PromotionDiscount getDiscountPrice(Promotion promotion) {
         if ("COUPON".equals(promotion.getPromotion_type())) {
@@ -115,24 +125,6 @@ public class ProductService {
             return new PercentDiscount();
         }
         return null;
-    }
-
-    private interface PromotionDiscount {
-        int applyDiscount(int originalPrice, int discountValue);
-    }
-
-    private class WonDiscount implements PromotionDiscount {
-        @Override
-        public int applyDiscount(int originalPrice, int discountValue) {
-            return originalPrice - discountValue;
-        }
-    }
-
-    private class PercentDiscount implements PromotionDiscount {
-        @Override
-        public int applyDiscount(int originalPrice, int discountValue) {
-            return originalPrice - (originalPrice * discountValue / 100);
-        }
     }
 
 }
